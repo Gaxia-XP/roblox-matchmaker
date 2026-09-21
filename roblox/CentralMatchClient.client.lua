@@ -22,24 +22,34 @@ label.Position = UDim2.new(0, 10, 0, 255)
 label.Text = "idle"
 label.Parent = gui
 
+local joined = false
+
 btn.MouseButton1Click:Connect(function()
-	label.Text = "joining..."
-	event:FireServer("Join")
+	if joined then
+		event:FireServer("Leave")
+	else
+		label.Text = "joining..."
+		event:FireServer("Join")
+	end
 end)
 
 event.OnClientEvent:Connect(function(kind, data)
 	if kind == "Queued" then
+		joined = true
 		label.Text = "queued #" .. tostring(data.position)
 		btn.Text = "Leave"
 	elseif kind == "Assigned" then
+		joined = false
 		local a = table.concat(data.team_a, ",")
 		local b = table.concat(data.team_b, ",")
 		label.Text = "MATCH! A:" .. a .. " B:" .. b
 		btn.Text = "Join 2v2 (Central)"
 	elseif kind == "Left" then
+		joined = false
 		label.Text = "idle"
 		btn.Text = "Join 2v2 (Central)"
 	elseif kind == "Error" then
+		joined = false
 		label.Text = "error: " .. tostring(data.message)
 	end
 end)
