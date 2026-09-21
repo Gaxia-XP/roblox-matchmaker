@@ -18,6 +18,7 @@ import uuid
 import psycopg2
 import psycopg2.extras
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
 DATABASE_URL = os.environ["DATABASE_URL"]
@@ -107,6 +108,82 @@ def status(user_id: str):
     if not row:
         return {"state": "idle", "match_id": ""}
     return {"state": row["status"], "match_id": row["match_id"]}
+
+
+@app.get("/v1/queue")
+def queue_list():
+    con = db()
+    try:
+        with con.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                """SELECT user_id, party_id, mode, status, match_id,
+                          EXTRACT(EPOCH FROM (now() - enqueued_at))::int AS wait_s
+                   FROM mm_queue ORDER BY enqueued_at LIMIT 100"""
+            )
+            rows = [dict(r) for r in cur.fetchall()]
+    finally:
+        con.close()
+    return {"queue": rows}
+
+
+@app.get("/v1/matches")
+def matches_list(limit: int = 10):
+    limit = max(1, min(limit, 50))
+    con = db()
+    try:
+        with con.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                """SELECT id, mode, team_a, team_b, status, created_at
+                   FROM mm_matches ORDER BY created_at DESC LIMIT %s""",
+                (limit,),
+            )
+            rows = [dict(r) for r in cur.fetchall()]
+    finally:
+        con.close()
+    for r in rows:
+        r["created_at"] = str(r["created_at"])
+    return {"matches": rows}
+
+
+DASHBOARD_HTML = """<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Matchmaker Live</title>
+<style>
+body{font-family:system-ui,sans-serif;background:#111;color:#eee;margin:0;padding:16px}
+h1{font-size:20px}.card{background:#1c1c1c;border-radius:10px;padding:12px;margin:10px 0}
+.team{display:flex;gap:8px;margin-top:6px;flex-wrap:wrap}.p{background:#2a2a2a;border-radius:6px;padding:6px 10px}
+.a .p{border-left:4px solid #4da3ff}.b .p{border-left:4px solid #ff5d5d}
+.q{display:flex;gap:8px;flex-wrap:wrap}.small{color:#999;font-size:12px}
+#st{position:sticky;top:0;background:#111;padding:8px 0}
+</style></head><body>
+<h1>Matchmaker Live <span class="small" id="ts"></span></h1>
+<div id="st" class="small">connecting...</div>
+<h2>Queue (<span id="qc">0</span>)</h2><div class="q" id="q"></div>
+<h2>Recent matches</h2><div id="m"></div>
+<script>
+async function j(p){const r=await fetch(p);return r.json()}
+async function tick(){
+  try{
+    const q=await j('/v1/queue');const m=await j('/v1/matches?limit=10');
+    document.getElementById('st').textContent='live';
+    document.getElementById('qc').textContent=q.queue.length;
+    document.getElementById('q').innerHTML=q.queue.map(function(x){
+      return '<div class="p">'+x.user_id+'<div class="small">'+x.status+' · '+x.wait_s+'s</div></div>'}).join('')||'<span class="small">empty</span>';
+    document.getElementById('m').innerHTML=m.matches.map(function(x){
+      return '<div class="card"><b>'+x.id+'</b> <span class="small">'+x.mode+' · '+x.status+'</span>'
+      +'<div class="team a">'+x.team_a.map(function(p){return '<div class="p">'+p+'</div>'}).join('')+'</div>'
+      +'<div class="team b">'+x.team_b.map(function(p){return '<div class="p">'+p+'</div>'}).join('')+'</div></div>'}).join('');
+    document.getElementById('ts').textContent=new Date().toLocaleTimeString();
+  }catch(e){document.getElementById('st').textContent='reconnecting...'}
+}
+setInterval(tick,3000);tick();
+</script></body></html>"""
+
+
+@app.get("/dashboard", response_class=HTMLResponse)
+def dashboard():
+    return DASHBOARD_HTML
 
 
 @app.get("/v1/match/{match_id}")
