@@ -38,8 +38,8 @@ def test_dashboard_renders_operator_overview():
     response = client.get("/dashboard")
 
     assert response.status_code == 200
-    assert "Matchmaking Control Room" in response.text
-    assert "Waiting players" in response.text
+    assert "Cooking Battle // Match Control" in response.text
+    assert "WAITING PLAYERS" in response.text
     assert 'aria-live="polite"' in response.text
 
 

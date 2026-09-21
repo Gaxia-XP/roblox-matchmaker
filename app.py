@@ -155,8 +155,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="color-scheme" content="dark">
-<title>Matchmaking Control Room</title>
+<meta name="color-scheme" content="light">
+<title>Cooking Battle // Match Control</title>
 <style>
 :root{
   --bg:#090d14;--surface:#101722;--surface-2:#151e2b;--line:#223043;
@@ -242,34 +242,110 @@ h1{margin:0;font-size:clamp(30px,4vw,48px);line-height:1.05;letter-spacing:-.04e
 }
 @media(prefers-reduced-motion:no-preference){.status-pill.live .status-dot{animation:pulse 2s infinite}@keyframes pulse{50%{box-shadow:0 0 0 7px rgba(70,214,154,0)}}}
 </style>
+<style>
+/* Visual source: VoltAgent/awesome-design-md, nintendo-2001/DESIGN.md */
+:root{
+  --bg:#21242e;--surface:#fff;--surface-2:#dedede;--line:#3d4f97;
+  --text:#21242e;--muted:#3d4f97;--orange:#f68d1f;--green:#ecab37;
+  --blue:#7a8aba;--red:#60619c;--radius:0
+}
+body{
+  background-color:#21242e;color:#21242e;font-family:Arial,Helvetica,sans-serif;
+  background-image:radial-gradient(rgba(159,190,231,.16) 1px,transparent 1px);
+  background-size:5px 5px;-webkit-font-smoothing:auto
+}
+body:before{display:none}
+.shell{
+  width:min(920px,calc(100% - 32px));margin:28px auto;padding:8px;
+  background:repeating-linear-gradient(0deg,#7a8aba 0,#7a8aba 3px,#8091c0 4px);
+  border-top:3px solid #c0d5e6;border-right:3px solid #3d4f97;
+  border-bottom:5px solid #3d4f97;border-left:3px solid #9fbee7;
+  clip-path:polygon(14px 0,100% 0,100% calc(100% - 14px),calc(100% - 14px) 100%,0 100%,0 14px)
+}
+.topbar{
+  min-height:44px;margin:0;display:flex;padding:8px 12px;background-color:#21242e;
+  background-image:radial-gradient(#3b4050 1px,transparent 1px);background-size:4px 4px;
+  border-bottom:4px solid #3d4f97
+}
+.brand{gap:10px;align-items:center;letter-spacing:.5px}
+.brand-product{
+  padding:4px 12px;background:#fff;color:#e60012;border:2px solid #e60012;
+  border-radius:999px;font:900 14px/1 Arial Black,Arial,sans-serif
+}
+.brand-divider{display:none}.brand-area{color:#ecab37;font:700 11px/1 Arial,sans-serif;letter-spacing:.5px;text-transform:uppercase}
+.connection{color:#9fbee7;font:10px/1.2 Arial,sans-serif;text-transform:uppercase}
+.status-pill{padding:6px 8px;border:1px solid #ecab37;border-radius:2px;background:#ecab37;color:#21242e;font:700 10px/1 Arial,sans-serif;text-transform:uppercase}
+.status-dot{width:6px;height:6px;background:#21242e}.status-pill.live .status-dot{background:#21242e;box-shadow:none}.status-pill.error{background:#e60012;border-color:#e60012;color:#fff}.status-pill.error .status-dot{background:#fff}
+.hero{
+  position:relative;min-height:174px;margin:4px 0;padding:26px 28px;align-items:center;
+  background-color:#acace7;
+  background-image:linear-gradient(90deg,rgba(61,79,151,.22) 1px,transparent 1px),linear-gradient(rgba(61,79,151,.22) 1px,transparent 1px);
+  background-size:18px 18px;border-top:3px solid #c0d5e6;border-right:3px solid #3d4f97;border-bottom:5px solid #3d4f97;border-left:3px solid #9fbee7;
+  clip-path:polygon(12px 0,100% 0,100% calc(100% - 12px),calc(100% - 12px) 100%,0 100%,0 12px)
+}
+.eyebrow{display:inline-block;margin:0 0 12px;padding:5px 8px;background:#f68d1f;color:#fff;font:700 10px/1 Arial,sans-serif;letter-spacing:.5px;text-transform:uppercase}
+h1{margin:0;color:#fff;font:900 clamp(38px,7vw,64px)/.9 Arial Black,Arial,sans-serif;letter-spacing:-2px;-webkit-text-stroke:2px #21242e;text-shadow:4px 4px 0 #3d4f97;text-transform:uppercase}
+.subtitle{margin:18px 0 0;color:#21242e;font:700 13px/1.3 Arial,sans-serif}
+.refresh-note{align-self:flex-start;padding:7px 9px;background:#21242e;color:#ecab37;font:700 10px/1 Arial,sans-serif;text-transform:uppercase;border-bottom:3px solid #3d4f97}
+.error-banner{margin:4px 0;padding:10px 12px;border:2px solid #e60012;border-radius:0;background:#fff;color:#e60012;font:700 11px/1.3 Arial,sans-serif;text-transform:uppercase}
+.metrics{display:grid;grid-template-columns:repeat(4,1fr);gap:4px;margin:4px 0;border:0;border-radius:0;background:#7a8aba;overflow:visible}
+.metric{min-height:92px;padding:12px 14px;background:#c0d5e6;border:0;border-top:2px solid #fff;border-right:2px solid #3d4f97;border-bottom:4px solid #3d4f97;border-left:2px solid #9fbee7}
+.metric:last-child{border-right:2px solid #3d4f97}
+.metric-label{color:#3d4f97;font:700 10px/1.1 Arial,sans-serif;letter-spacing:.5px;text-transform:uppercase}
+.metric-value{color:#21242e;font:900 30px/1 Arial Black,Arial,sans-serif;letter-spacing:-1px}.metric-value.text{font-size:18px;letter-spacing:0;text-transform:uppercase}
+.workspace{display:grid;grid-template-columns:minmax(0,2fr) minmax(250px,1fr);gap:4px;align-items:start}
+.panel{border:0;border-radius:0;background:#dedede;border-top:2px solid #fff;border-right:2px solid #3d4f97;border-bottom:4px solid #3d4f97;border-left:2px solid #9fbee7;overflow:hidden}
+.panel-head{min-height:35px;padding:8px 10px;background-color:#21242e;background-image:radial-gradient(#3b4050 1px,transparent 1px);background-size:4px 4px;border:0;border-bottom:3px solid #3d4f97}
+.panel-title{color:#ecab37;font:700 11px/1 Arial,sans-serif;letter-spacing:.5px;text-transform:uppercase}
+.count{min-width:22px;padding:4px 6px;border:1px solid #fff;border-radius:2px;background:#f68d1f;color:#fff;font:700 10px/1 Arial,sans-serif}
+.queue-list{padding:4px}
+.queue-row{grid-template-columns:28px minmax(0,1fr) auto;gap:8px;padding:10px 8px;background:#fff;border:0;border-bottom:2px dotted #60619c}.queue-row:nth-child(even){background:#dedede}.queue-row:last-child{border-bottom:0}
+.position{color:#3d4f97;font:700 10px/1 Arial,sans-serif}.player-id{font:700 12px/1.2 Arial,sans-serif}.player-meta{margin-top:3px;color:#3d4f97;font:10px/1.2 Arial,sans-serif}.wait{padding:3px 5px;background:#ecab37;color:#21242e;font:700 10px/1 Arial,sans-serif}
+.matches{padding:4px}.match{padding:12px;background:#fff;border:0;border-bottom:4px solid #7a8aba}.match:last-child{border-bottom:0}
+.match-head{margin-bottom:10px;padding-bottom:7px;border-bottom:1px dotted #60619c}.match-id{color:#3d4f97;font:700 11px/1 Consolas,monospace}.match-meta{color:#3d4f97;font:10px/1 Arial,sans-serif}.tag{padding:3px 5px;border-radius:2px;background:#ecab37;color:#21242e;font:700 9px/1 Arial,sans-serif;letter-spacing:.5px}
+.teams{grid-template-columns:minmax(0,1fr) 24px minmax(0,1fr);gap:6px}.team{gap:5px}.team-label,.team-a .team-label,.team-b .team-label{color:#3d4f97;font:700 9px/1 Arial,sans-serif;letter-spacing:.5px}
+.roster{gap:4px}.player{padding:6px;border:1px solid #7a8aba;border-radius:2px;background:#dedede;color:#21242e;font:700 10px/1.2 Arial,sans-serif}.team-a .player{border-left:4px solid #3d4f97}.team-b .player{border-left:4px solid #60619c}.versus{color:#f68d1f;font:900 10px/1 Arial Black,Arial,sans-serif}
+.empty{padding:34px 16px;background:#dedede;border:1px inset #7a8aba}.empty-title{margin:0 0 5px;color:#21242e;font:700 12px/1.2 Arial,sans-serif;text-transform:uppercase}.empty-copy{color:#3d4f97;font:10px/1.4 Arial,sans-serif}
+.footer{margin-top:4px;padding:10px 12px;background-color:#21242e;background-image:radial-gradient(#3b4050 1px,transparent 1px);background-size:4px 4px;color:#9fbee7;font:10px/1.3 Arial,sans-serif;text-transform:uppercase;letter-spacing:.5px}
+@media(max-width:760px){
+  .shell{width:calc(100% - 16px);margin:8px auto}.topbar{align-items:flex-start}.connection{align-items:flex-end;flex-direction:column}.hero{min-height:155px;padding:20px}.refresh-note{display:none}
+  .metrics{grid-template-columns:repeat(2,1fr)}.metric:nth-child(2){border-right:2px solid #3d4f97}.metric:nth-child(-n+2){border-bottom:4px solid #3d4f97}
+  .workspace{grid-template-columns:1fr}.queue-panel{order:-1}
+}
+@media(max-width:460px){
+  .brand-area{display:none}.connection>span:last-child{display:none}.hero{min-height:140px;padding:16px}h1{font-size:38px}.subtitle{font-size:11px}
+  .metrics{grid-template-columns:1fr}.metric{min-height:76px;border-bottom:4px solid #3d4f97!important}.teams{grid-template-columns:1fr}.versus{display:none}.team-b{margin-top:6px}
+}
+</style>
 </head>
 <body>
 <main class="shell">
   <header class="topbar">
-    <div class="brand"><span class="brand-product">Cooking Battle</span><span class="brand-divider"></span><span class="brand-area">Matchmaking</span></div>
+    <div class="brand"><span class="brand-product">Cooking Battle</span><span class="brand-divider"></span><span class="brand-area">Match Network</span></div>
     <div class="connection"><span class="status-pill" id="status"><span class="status-dot"></span><span id="status-text">Connecting</span></span><span id="updated">Waiting for data</span></div>
   </header>
   <section class="hero">
-    <div><p class="eyebrow">Live operations</p><h1>Matchmaking Control Room</h1><p class="subtitle">A live view of the 2v2 queue and recently formed matches.</p></div>
-    <span class="refresh-note">Auto-refreshes every 3 seconds</span>
+    <div><p class="eyebrow">Central network // 2v2</p><h1>Match Control</h1><p class="subtitle">Live queue telemetry and completed team assignments.</p></div>
+    <span class="refresh-note">Refresh // 03 sec</span>
   </section>
   <div class="error-banner" id="error" role="alert">Live data is temporarily unavailable. Reconnecting automatically.</div>
   <section class="metrics" aria-label="Matchmaking summary" aria-live="polite">
-    <article class="metric"><span class="metric-label">Waiting players</span><strong class="metric-value" id="waiting">—</strong></article>
-    <article class="metric"><span class="metric-label">Longest wait</span><strong class="metric-value" id="longest">—</strong></article>
-    <article class="metric"><span class="metric-label">Recent matches</span><strong class="metric-value" id="match-count">—</strong></article>
-    <article class="metric"><span class="metric-label">Queue mode</span><strong class="metric-value text">2 versus 2</strong></article>
+    <article class="metric"><span class="metric-label">WAITING PLAYERS</span><strong class="metric-value" id="waiting">—</strong></article>
+    <article class="metric"><span class="metric-label">LONGEST WAIT</span><strong class="metric-value" id="longest">—</strong></article>
+    <article class="metric"><span class="metric-label">RECENT MATCHES</span><strong class="metric-value" id="match-count">—</strong></article>
+    <article class="metric"><span class="metric-label">QUEUE MODE</span><strong class="metric-value text">2 VS 2</strong></article>
   </section>
   <section class="workspace">
-    <article class="panel">
-      <div class="panel-head"><h2 class="panel-title">Live queue</h2><span class="count" id="queue-count">0</span></div>
-      <div class="queue-list" id="queue" aria-live="polite"><div class="empty"><p class="empty-title">Loading queue</p><p class="empty-copy">Waiting for the first update.</p></div></div>
-    </article>
-    <article class="panel">
-      <div class="panel-head"><h2 class="panel-title">Recent matches</h2><span class="count" id="matches-count">0</span></div>
+    <article class="panel matches-panel">
+      <div class="panel-head"><h2 class="panel-title">// RECENT MATCHES</h2><span class="count" id="matches-count">0</span></div>
       <div class="matches" id="matches" aria-live="polite"><div class="empty"><p class="empty-title">Loading matches</p><p class="empty-copy">Recent activity will appear here.</p></div></div>
     </article>
+    <article class="panel queue-panel">
+      <div class="panel-head"><h2 class="panel-title">// LIVE QUEUE</h2><span class="count" id="queue-count">0</span></div>
+      <div class="queue-list" id="queue" aria-live="polite"><div class="empty"><p class="empty-title">Loading queue</p><p class="empty-copy">Waiting for the first update.</p></div></div>
+    </article>
   </section>
+  <footer class="footer">Central match service // Cooking Battle // Live telemetry</footer>
 </main>
 <script>
 const byId=id=>document.getElementById(id);
