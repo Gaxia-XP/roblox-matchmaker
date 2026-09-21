@@ -34,6 +34,15 @@ def test_healthz():
     assert client.get("/healthz").json() == {"ok": True}
 
 
+def test_dashboard_renders_operator_overview():
+    response = client.get("/dashboard")
+
+    assert response.status_code == 200
+    assert "Matchmaking Control Room" in response.text
+    assert "Waiting players" in response.text
+    assert 'aria-live="polite"' in response.text
+
+
 def test_four_solos_form_match():
     for i in range(3):
         assert join(f"solo{i}")["state"] == "waiting"
