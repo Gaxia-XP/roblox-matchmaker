@@ -11,9 +11,12 @@ Matching: greedy oldest-first, parties kept together when they fit.
 A match = 2 teams x 2 players.
 """
 import os
+import json
 import threading
 import time
 import uuid
+import urllib.parse
+import urllib.request
 
 import psycopg2
 import psycopg2.extras
@@ -23,6 +26,10 @@ from pydantic import BaseModel
 
 DATABASE_URL = os.environ["DATABASE_URL"]
 MODE_TEAM_SIZE = {"2v2": 2}
+ROBLOX_USERS_URL = "https://users.roblox.com/v1/users"
+ROBLOX_THUMBNAILS_URL = "https://thumbnails.roblox.com/v1/users/avatar-headshot"
+PROFILE_CACHE = {}
+PROFILE_CACHE_TTL = 3600
 
 app = FastAPI(title="roblox-matchmaker")
 
@@ -148,6 +155,78 @@ def matches_list(limit: int = 10):
     for r in rows:
         r["created_at"] = str(r["created_at"])
     return {"matches": rows}
+
+
+def fetch_roblox_json(url, data=None):
+    body = json.dumps(data).encode() if data is not None else None
+    request = urllib.request.Request(
+        url,
+        data=body,
+        headers={"Content-Type": "application/json", "User-Agent": "cooking-battle-matchmaker"},
+    )
+    with urllib.request.urlopen(request, timeout=5) as response:
+        return json.load(response)
+
+
+@app.get("/v1/players")
+def player_profiles(user_ids: str):
+    ids = list(dict.fromkeys(part.strip() for part in user_ids.split(",") if part.strip()))[:100]
+    now = time.time()
+    players = {}
+    missing = []
+    for user_id in ids:
+        cached = PROFILE_CACHE.get(user_id)
+        if cached and cached[0] > now:
+            players[user_id] = cached[1]
+        elif user_id.isdigit():
+            missing.append(int(user_id))
+        else:
+            players[user_id] = fallback_profile(user_id)
+
+    if missing:
+        try:
+            user_data = fetch_roblox_json(
+                ROBLOX_USERS_URL,
+                {"userIds": missing, "excludeBannedUsers": False},
+            ).get("data", [])
+            thumbnail_url = ROBLOX_THUMBNAILS_URL + "?" + urllib.parse.urlencode({
+                "userIds": ",".join(map(str, missing)),
+                "size": "150x150",
+                "format": "Png",
+                "isCircular": "false",
+            })
+            thumbnails = fetch_roblox_json(thumbnail_url).get("data", [])
+            avatar_by_id = {
+                str(row["targetId"]): row.get("imageUrl", "")
+                for row in thumbnails if row.get("state") == "Completed"
+            }
+            user_by_id = {str(row["id"]): row for row in user_data}
+            for numeric_id in missing:
+                user_id = str(numeric_id)
+                user = user_by_id.get(user_id)
+                profile = fallback_profile(user_id) if not user else {
+                    "user_id": user_id,
+                    "username": user["name"],
+                    "display_name": user["displayName"],
+                    "avatar_url": avatar_by_id.get(user_id, ""),
+                }
+                players[user_id] = profile
+                PROFILE_CACHE[user_id] = (now + PROFILE_CACHE_TTL, profile)
+        except Exception:
+            for numeric_id in missing:
+                user_id = str(numeric_id)
+                players[user_id] = fallback_profile(user_id)
+
+    return {"players": {user_id: players[user_id] for user_id in ids}}
+
+
+def fallback_profile(user_id):
+    return {
+        "user_id": user_id,
+        "username": user_id,
+        "display_name": user_id,
+        "avatar_url": "",
+    }
 
 
 DASHBOARD_HTML = """<!DOCTYPE html>
@@ -299,12 +378,13 @@ h1{margin:0;color:#fff;font:900 clamp(38px,7vw,64px)/.9 Arial Black,Arial,sans-s
 .panel-title{color:#ecab37;font:700 11px/1 Arial,sans-serif;letter-spacing:.5px;text-transform:uppercase}
 .count{min-width:22px;padding:4px 6px;border:1px solid #fff;border-radius:2px;background:#f68d1f;color:#fff;font:700 10px/1 Arial,sans-serif}
 .queue-list{padding:4px}
-.queue-row{grid-template-columns:28px minmax(0,1fr) auto;gap:8px;padding:10px 8px;background:#fff;border:0;border-bottom:2px dotted #60619c}.queue-row:nth-child(even){background:#dedede}.queue-row:last-child{border-bottom:0}
+.queue-row{grid-template-columns:22px 38px minmax(0,1fr) auto;gap:8px;padding:8px;background:#fff;border:0;border-bottom:2px dotted #60619c}.queue-row:nth-child(even){background:#dedede}.queue-row:last-child{border-bottom:0}
 .position{color:#3d4f97;font:700 10px/1 Arial,sans-serif}.player-id{font:700 12px/1.2 Arial,sans-serif}.player-meta{margin-top:3px;color:#3d4f97;font:10px/1.2 Arial,sans-serif}.wait{padding:3px 5px;background:#ecab37;color:#21242e;font:700 10px/1 Arial,sans-serif}
+.avatar{width:38px;height:38px;display:grid;place-items:center;overflow:hidden;background:#9fbee7;border-top:2px solid #fff;border-right:2px solid #3d4f97;border-bottom:3px solid #3d4f97;border-left:2px solid #c0d5e6;color:#21242e;font:900 12px/1 Arial Black,Arial,sans-serif}.avatar img{width:100%;height:100%;object-fit:cover}.username{font-weight:400}.uid{font-family:Consolas,monospace}
 .matches{padding:4px}.match{padding:12px;background:#fff;border:0;border-bottom:4px solid #7a8aba}.match:last-child{border-bottom:0}
 .match-head{margin-bottom:10px;padding-bottom:7px;border-bottom:1px dotted #60619c}.match-id{color:#3d4f97;font:700 11px/1 Consolas,monospace}.match-meta{color:#3d4f97;font:10px/1 Arial,sans-serif}.tag{padding:3px 5px;border-radius:2px;background:#ecab37;color:#21242e;font:700 9px/1 Arial,sans-serif;letter-spacing:.5px}
 .teams{grid-template-columns:minmax(0,1fr) 24px minmax(0,1fr);gap:6px}.team{gap:5px}.team-label,.team-a .team-label,.team-b .team-label{color:#3d4f97;font:700 9px/1 Arial,sans-serif;letter-spacing:.5px}
-.roster{gap:4px}.player{padding:6px;border:1px solid #7a8aba;border-radius:2px;background:#dedede;color:#21242e;font:700 10px/1.2 Arial,sans-serif}.team-a .player{border-left:4px solid #3d4f97}.team-b .player{border-left:4px solid #60619c}.versus{color:#f68d1f;font:900 10px/1 Arial Black,Arial,sans-serif}
+.roster{gap:4px}.player{display:grid;grid-template-columns:26px minmax(0,1fr);gap:5px;align-items:center;min-width:125px;padding:4px;border:1px solid #7a8aba;border-radius:2px;background:#dedede;color:#21242e;font:700 10px/1.2 Arial,sans-serif}.player .avatar{width:26px;height:26px;border-width:1px 1px 2px;font-size:9px}.player-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.player-handle{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#3d4f97;font:9px/1.2 Arial,sans-serif}.team-a .player{border-left:4px solid #3d4f97}.team-b .player{border-left:4px solid #60619c}.versus{color:#f68d1f;font:900 10px/1 Arial Black,Arial,sans-serif}
 .empty{padding:34px 16px;background:#dedede;border:1px inset #7a8aba}.empty-title{margin:0 0 5px;color:#21242e;font:700 12px/1.2 Arial,sans-serif;text-transform:uppercase}.empty-copy{color:#3d4f97;font:10px/1.4 Arial,sans-serif}
 .footer{margin-top:4px;padding:10px 12px;background-color:#21242e;background-image:radial-gradient(#3b4050 1px,transparent 1px);background-size:4px 4px;color:#9fbee7;font:10px/1.3 Arial,sans-serif;text-transform:uppercase;letter-spacing:.5px}
 @media(max-width:760px){
@@ -354,23 +434,28 @@ const duration=seconds=>{const s=Math.max(0,Number(seconds)||0);if(s<60)return `
 const clock=value=>{const date=new Date(value);return Number.isNaN(date.getTime())?'—':date.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})};
 async function json(path){const response=await fetch(path,{cache:'no-store'});if(!response.ok)throw new Error(`HTTP ${response.status}`);return response.json()}
 function empty(title,copy){return `<div class="empty"><p class="empty-title">${title}</p><p class="empty-copy">${copy}</p></div>`}
-function renderQueue(rows){
+function identity(userId,profiles){return profiles[userId]||{user_id:userId,username:userId,display_name:userId,avatar_url:''}}
+function initials(value){return String(value||'?').slice(0,2).toUpperCase()}
+function avatar(profile){return `<span class="avatar">${profile.avatar_url?`<img src="${esc(profile.avatar_url)}" alt="" loading="lazy">`:esc(initials(profile.display_name))}</span>`}
+function renderQueue(rows,profiles){
   const waiting=rows.filter(row=>row.status==='waiting');
   byId('waiting').textContent=waiting.length;
   byId('longest').textContent=waiting.length?duration(Math.max(...waiting.map(row=>row.wait_s))):'0s';
   byId('queue-count').textContent=waiting.length;
-  byId('queue').innerHTML=waiting.map((row,index)=>`<div class="queue-row"><span class="position">${String(index+1).padStart(2,'0')}</span><div><div class="player-id">${esc(row.user_id)}</div><div class="player-meta">${row.party_id?`Party ${esc(row.party_id)}`:'Solo player'} · ${esc(row.mode)}</div></div><span class="wait">${duration(row.wait_s)}</span></div>`).join('')||empty('Queue is clear','New players will appear here as soon as they join.');
+  byId('queue').innerHTML=waiting.map((row,index)=>{const profile=identity(row.user_id,profiles);return `<div class="queue-row"><span class="position">${String(index+1).padStart(2,'0')}</span>${avatar(profile)}<div><div class="player-id">${esc(profile.display_name)} <span class="username">@${esc(profile.username)}</span></div><div class="player-meta"><span class="uid">${esc(row.user_id)}</span> · ${row.party_id?`Party ${esc(row.party_id)}`:'Solo'} · ${esc(row.mode)}</div></div><span class="wait">${duration(row.wait_s)}</span></div>`}).join('')||empty('Queue is clear','New players will appear here as soon as they join.');
 }
-function roster(players){return players.map(player=>`<span class="player">${esc(player)}</span>`).join('')}
-function renderMatches(rows){
+function roster(players,profiles){return players.map(userId=>{const profile=identity(userId,profiles);return `<span class="player">${avatar(profile)}<span><span class="player-name">${esc(profile.display_name)}</span><span class="player-handle">@${esc(profile.username)} · ${esc(userId)}</span></span></span>`}).join('')}
+function renderMatches(rows,profiles){
   byId('match-count').textContent=rows.length;
   byId('matches-count').textContent=rows.length;
-  byId('matches').innerHTML=rows.map(match=>`<article class="match"><div class="match-head"><span class="match-id">${esc(match.id)}</span><div class="match-meta"><span class="tag">${esc(match.status)}</span><time>${clock(match.created_at)}</time></div></div><div class="teams"><div class="team team-a"><span class="team-label">Team A</span><div class="roster">${roster(match.team_a)}</div></div><span class="versus">VS</span><div class="team team-b"><span class="team-label">Team B</span><div class="roster">${roster(match.team_b)}</div></div></div></article>`).join('')||empty('No matches yet','The next completed pairing will appear here.');
+  byId('matches').innerHTML=rows.map(match=>`<article class="match"><div class="match-head"><span class="match-id">${esc(match.id)}</span><div class="match-meta"><span class="tag">${esc(match.status)}</span><time>${clock(match.created_at)}</time></div></div><div class="teams"><div class="team team-a"><span class="team-label">Team A</span><div class="roster">${roster(match.team_a,profiles)}</div></div><span class="versus">VS</span><div class="team team-b"><span class="team-label">Team B</span><div class="roster">${roster(match.team_b,profiles)}</div></div></div></article>`).join('')||empty('No matches yet','The next completed pairing will appear here.');
 }
 async function refresh(){
   try{
     const [queueData,matchData]=await Promise.all([json('/v1/queue'),json('/v1/matches?limit=12')]);
-    renderQueue(queueData.queue);renderMatches(matchData.matches);
+    const userIds=[...queueData.queue.map(row=>row.user_id),...matchData.matches.flatMap(match=>[...match.team_a,...match.team_b])];
+    const profileData=userIds.length?await json('/v1/players?user_ids='+encodeURIComponent([...new Set(userIds)].join(','))):{players:{}};
+    renderQueue(queueData.queue,profileData.players);renderMatches(matchData.matches,profileData.players);
     byId('status').className='status-pill live';byId('status-text').textContent='Live';
     byId('updated').textContent=`Updated ${new Date().toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'})}`;
     byId('error').classList.remove('show');

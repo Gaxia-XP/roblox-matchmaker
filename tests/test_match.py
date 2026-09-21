@@ -43,6 +43,36 @@ def test_dashboard_renders_operator_overview():
     assert 'aria-live="polite"' in response.text
 
 
+def test_player_profiles_return_roblox_names_and_avatars(monkeypatch):
+    mm.PROFILE_CACHE.clear()
+
+    def fake_fetch(url, data=None):
+        if url == mm.ROBLOX_USERS_URL:
+            assert data == {"userIds": [2973404790], "excludeBannedUsers": False}
+            return {"data": [{"id": 2973404790, "name": "Gaxia", "displayName": "Gaxia XP"}]}
+        assert "userIds=2973404790" in url
+        return {"data": [{"targetId": 2973404790, "state": "Completed", "imageUrl": "https://example.com/avatar.png"}]}
+
+    monkeypatch.setattr(mm, "fetch_roblox_json", fake_fetch)
+
+    response = client.get("/v1/players", params={"user_ids": "2973404790,sim-player"})
+
+    assert response.json() == {"players": {
+        "2973404790": {
+            "user_id": "2973404790",
+            "username": "Gaxia",
+            "display_name": "Gaxia XP",
+            "avatar_url": "https://example.com/avatar.png",
+        },
+        "sim-player": {
+            "user_id": "sim-player",
+            "username": "sim-player",
+            "display_name": "sim-player",
+            "avatar_url": "",
+        },
+    }}
+
+
 def test_four_solos_form_match():
     for i in range(3):
         assert join(f"solo{i}")["state"] == "waiting"
