@@ -64,6 +64,7 @@ def join(req: JoinReq):
     if req.mode not in MODE_TEAM_SIZE:
         raise HTTPException(400, "unknown mode")
     con = db()
+    con.autocommit = False
     try:
         with con.cursor() as cur:
             cur.execute(
@@ -78,6 +79,10 @@ def join(req: JoinReq):
             cur.execute("SELECT count(*) FROM mm_queue WHERE mode=%s AND status='waiting'",
                         (req.mode,))
             position = cur.fetchone()[0]
+        con.commit()
+    except Exception:
+        con.rollback()
+        raise
     finally:
         con.close()
     return {"state": "assigned" if match_id else "waiting",
@@ -206,7 +211,8 @@ def try_match(cur, mode):
     size = MODE_TEAM_SIZE[mode]
     cur.execute(
         """SELECT user_id, party_id FROM mm_queue
-           WHERE mode=%s AND status='waiting' ORDER BY enqueued_at LIMIT 24""",
+           WHERE mode=%s AND status='waiting' ORDER BY enqueued_at LIMIT 24
+           FOR UPDATE SKIP LOCKED""",
         (mode,),
     )
     waiters = cur.fetchall()
@@ -251,11 +257,18 @@ def sweeper(interval=5):
     while True:
         try:
             con = db()
+            con.autocommit = False
             try:
                 with con.cursor() as cur:
                     for mode in MODE_TEAM_SIZE:
-                        while try_match(cur, mode):
-                            pass
+                        while True:
+                            match_id = try_match(cur, mode)
+                            con.commit()
+                            if not match_id:
+                                break
+            except Exception:
+                con.rollback()
+                raise
             finally:
                 con.close()
         except Exception:
