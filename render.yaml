@@ -1,0 +1,9 @@
+services:
+  - type: web
+    name: roblox-matchmaker
+    runtime: docker
+    plan: free
+    healthCheckPath: /healthz
+    envVars:
+      - key: DATABASE_URL
+        sync: false
