@@ -3,28 +3,36 @@
 Endpoints (called by game servers via HttpService):
   GET  /healthz
   POST /v1/queue/join   {user_id, party_id?, mode?} -> {state, position}
+  POST /v1/queue/join-party {party_id, member_ids, mode?, source_server_id?, source_place_id?} -> {state, position}
   POST /v1/queue/leave  {user_id}                   -> {ok}
+  POST /v1/queue/leave-party {party_id}             -> {ok}
   GET  /v1/queue/status?user_id=                    -> {state, match_id?}
   GET  /v1/match/{match_id}                         -> {teams, status}
+  POST /v1/match/{match_id}/reservation/claim
+  POST /v1/match/{match_id}/reservation/complete
+  GET  /v1/match/{match_id}/destination
 
 Matching: greedy oldest-first, parties kept together when they fit.
 A match = 2 teams x 2 players.
 """
 import os
 import json
+import secrets
 import threading
 import time
 import uuid
 import urllib.parse
 import urllib.request
+from itertools import combinations
 
 import psycopg2
 import psycopg2.extras
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
 DATABASE_URL = os.environ["DATABASE_URL"]
+MATCHMAKER_API_KEY = os.environ["MATCHMAKER_API_KEY"]
 MODE_TEAM_SIZE = {"2v2": 2}
 ROBLOX_USERS_URL = "https://users.roblox.com/v1/users"
 ROBLOX_THUMBNAILS_URL = "https://thumbnails.roblox.com/v1/users/avatar-headshot"
@@ -32,6 +40,11 @@ PROFILE_CACHE = {}
 PROFILE_CACHE_TTL = 3600
 
 app = FastAPI(title="roblox-matchmaker")
+
+
+def require_server(x_matchmaker_key: str = Header(default="")):
+    if not secrets.compare_digest(x_matchmaker_key, MATCHMAKER_API_KEY):
+        raise HTTPException(401, "unauthorized")
 
 
 def db():
@@ -51,10 +64,36 @@ def init_schema():
         con.close()
 
 
+class JoinPartyReq(BaseModel):
+    party_id: str
+    member_ids: list[str]
+    mode: str = "2v2"
+    source_server_id: str = ""
+    source_place_id: int = 0
+
+
+class LeavePartyReq(BaseModel):
+    party_id: str
+
+
 class JoinReq(BaseModel):
     user_id: str
     party_id: str = ""
     mode: str = "2v2"
+    source_server_id: str = ""
+    source_place_id: int = 0
+
+
+class ReservationClaimReq(BaseModel):
+    source_server_id: str
+    destination_place_id: int
+
+
+class ReservationCompleteReq(BaseModel):
+    source_server_id: str
+    reservation_token: str
+    reserved_server_code: str
+    private_server_id: str
 
 
 class LeaveReq(BaseModel):
@@ -65,24 +104,44 @@ class LeaveReq(BaseModel):
 def healthz():
     return {"ok": True}
 
-
-@app.post("/v1/queue/join")
-def join(req: JoinReq):
+@app.post("/v1/queue/join-party", dependencies=[Depends(require_server)])
+def join_party(req: JoinPartyReq):
     if req.mode not in MODE_TEAM_SIZE:
         raise HTTPException(400, "unknown mode")
+    party_id = req.party_id.strip()
+    members = [user_id.strip() for user_id in req.member_ids]
+    if not party_id:
+        raise HTTPException(400, "party_id is required")
+    if any(not user_id for user_id in members):
+        raise HTTPException(400, "member_ids cannot contain empty values")
+    if len(set(members)) != len(members):
+        raise HTTPException(400, "member_ids cannot contain duplicates")
+    if len(members) != MODE_TEAM_SIZE[req.mode]:
+        raise HTTPException(400, "party must fill one team")
+
     con = db()
     con.autocommit = False
     try:
         with con.cursor() as cur:
-            cur.execute(
-                """INSERT INTO mm_queue (user_id, party_id, mode, status)
-                   VALUES (%s, %s, %s, 'waiting')
+            psycopg2.extras.execute_values(
+                cur,
+                """INSERT INTO mm_queue
+                   (user_id, party_id, mode, status, source_server_id, source_place_id)
+                   VALUES %s
                    ON CONFLICT (user_id) DO UPDATE
                    SET party_id=EXCLUDED.party_id, mode=EXCLUDED.mode,
-                       status='waiting', match_id='', enqueued_at=now()""",
-                (req.user_id, req.party_id, req.mode),
+                       status='waiting', match_id='',
+                       source_server_id=EXCLUDED.source_server_id,
+                       source_place_id=EXCLUDED.source_place_id, enqueued_at=now()""",
+                [(user_id, party_id, req.mode, "waiting", req.source_server_id, req.source_place_id)
+                 for user_id in members],
             )
-            match_id = try_match(cur, req.mode)
+            try_match(cur, req.mode)
+            cur.execute(
+                "SELECT status, match_id FROM mm_queue WHERE user_id = ANY(%s)",
+                (members,),
+            )
+            member_rows = cur.fetchall()
             cur.execute("SELECT count(*) FROM mm_queue WHERE mode=%s AND status='waiting'",
                         (req.mode,))
             position = cur.fetchone()[0]
@@ -92,11 +151,71 @@ def join(req: JoinReq):
         raise
     finally:
         con.close()
-    return {"state": "assigned" if match_id else "waiting",
-            "match_id": match_id or "", "position": position}
+    match_ids = {match_id for status, match_id in member_rows if status == "assigned"}
+    assigned = (
+        len(member_rows) == len(members)
+        and all(status == "assigned" for status, _ in member_rows)
+        and len(match_ids) == 1
+    )
+    return {"state": "assigned" if assigned else "waiting",
+            "match_id": next(iter(match_ids)) if assigned else "", "position": position}
 
 
-@app.post("/v1/queue/leave")
+@app.post("/v1/queue/leave-party", dependencies=[Depends(require_server)])
+def leave_party(req: LeavePartyReq):
+    party_id = req.party_id.strip()
+    if not party_id:
+        raise HTTPException(400, "party_id is required")
+    con = db()
+    try:
+        with con.cursor() as cur:
+            cur.execute(
+                "DELETE FROM mm_queue WHERE party_id=%s AND status='waiting'",
+                (party_id,),
+            )
+            removed = cur.rowcount
+    finally:
+        con.close()
+    return {"ok": True, "removed": removed}
+
+@app.post("/v1/queue/join", dependencies=[Depends(require_server)])
+def join(req: JoinReq):
+    if req.mode not in MODE_TEAM_SIZE:
+        raise HTTPException(400, "unknown mode")
+    con = db()
+    con.autocommit = False
+    try:
+        with con.cursor() as cur:
+            cur.execute(
+                """INSERT INTO mm_queue
+                   (user_id, party_id, mode, status, source_server_id, source_place_id)
+                   VALUES (%s, %s, %s, 'waiting', %s, %s)
+                   ON CONFLICT (user_id) DO UPDATE
+                   SET party_id=EXCLUDED.party_id, mode=EXCLUDED.mode,
+                       status='waiting', match_id='',
+                       source_server_id=EXCLUDED.source_server_id,
+                       source_place_id=EXCLUDED.source_place_id, enqueued_at=now()""",
+                (req.user_id, req.party_id, req.mode, req.source_server_id, req.source_place_id),
+            )
+            try_match(cur, req.mode)
+            cur.execute(
+                "SELECT status, match_id FROM mm_queue WHERE user_id=%s",
+                (req.user_id,),
+            )
+            status, match_id = cur.fetchone()
+            cur.execute("SELECT count(*) FROM mm_queue WHERE mode=%s AND status='waiting'",
+                        (req.mode,))
+            position = cur.fetchone()[0]
+        con.commit()
+    except Exception:
+        con.rollback()
+        raise
+    finally:
+        con.close()
+    return {"state": status, "match_id": match_id, "position": position}
+
+
+@app.post("/v1/queue/leave", dependencies=[Depends(require_server)])
 def leave(req: LeaveReq):
     con = db()
     try:
@@ -108,7 +227,7 @@ def leave(req: LeaveReq):
     return {"ok": True, "removed": removed}
 
 
-@app.get("/v1/queue/status")
+@app.get("/v1/queue/status", dependencies=[Depends(require_server)])
 def status(user_id: str):
     con = db()
     try:
@@ -475,7 +594,164 @@ def dashboard():
     return DASHBOARD_HTML
 
 
-@app.get("/v1/match/{match_id}")
+@app.post(
+    "/v1/match/{match_id}/reservation/claim",
+    dependencies=[Depends(require_server)],
+)
+def claim_reservation(match_id: str, req: ReservationClaimReq):
+    source_server_id = req.source_server_id.strip()
+    if not source_server_id:
+        raise HTTPException(400, "source_server_id is required")
+    if req.destination_place_id <= 0:
+        raise HTTPException(400, "destination_place_id must be positive")
+
+    con = db()
+    con.autocommit = False
+    try:
+        with con.cursor() as cur:
+            cur.execute(
+                "SELECT reservation_state, reservation_owner_server_id, reservation_token, "
+                "reservation_claim_expires_at, "
+                "COALESCE(reservation_claim_expires_at > clock_timestamp(), false) "
+                "FROM mm_matches WHERE id=%s FOR UPDATE",
+                (match_id,),
+            )
+            match_row = cur.fetchone()
+            if not match_row:
+                raise HTTPException(404, "no such match")
+            cur.execute(
+                "SELECT 1 FROM mm_queue WHERE match_id=%s AND status='assigned' "
+                "AND source_server_id=%s LIMIT 1",
+                (match_id, source_server_id),
+            )
+            if not cur.fetchone():
+                raise HTTPException(403, "source server is not part of this match")
+
+            state, owner, token, expires_at, lease_valid = match_row
+            if state == "ready":
+                result = {"won": False, "token": "", "state": "ready"}
+            elif state == "claimed" and lease_valid:
+                if owner == source_server_id:
+                    result = {"won": True, "token": token, "state": "claimed"}
+                else:
+                    result = {"won": False, "token": "", "state": "claimed"}
+            else:
+                token = uuid.uuid4().hex
+                cur.execute(
+                    """UPDATE mm_matches
+                       SET reservation_state='claimed', destination_place_id=%s,
+                           reservation_owner_server_id=%s, reservation_token=%s,
+                           reservation_claim_expires_at=clock_timestamp() + interval '30 seconds'
+                       WHERE id=%s""",
+                    (req.destination_place_id, source_server_id, token, match_id),
+                )
+                result = {"won": True, "token": token, "state": "claimed"}
+        con.commit()
+        return result
+    except Exception:
+        con.rollback()
+        raise
+    finally:
+        con.close()
+
+
+@app.post(
+    "/v1/match/{match_id}/reservation/complete",
+    dependencies=[Depends(require_server)],
+)
+def complete_reservation(match_id: str, req: ReservationCompleteReq):
+    source_server_id = req.source_server_id.strip()
+    if not source_server_id or not req.reservation_token:
+        raise HTTPException(400, "source_server_id and reservation_token are required")
+    if not req.reserved_server_code or not req.private_server_id:
+        raise HTTPException(400, "reservation identifiers are required")
+
+    con = db()
+    con.autocommit = False
+    try:
+        with con.cursor() as cur:
+            cur.execute(
+                """SELECT reservation_state, reservation_owner_server_id, reservation_token,
+                          reservation_claim_expires_at, reserved_server_code, private_server_id,
+                          COALESCE(reservation_claim_expires_at > clock_timestamp(), false)
+                   FROM mm_matches WHERE id=%s FOR UPDATE""",
+                (match_id,),
+            )
+            row = cur.fetchone()
+            if not row:
+                raise HTTPException(404, "no such match")
+            state, owner, token, expires_at, saved_code, saved_private_id, lease_valid = row
+            if state == "ready":
+                if (owner, token, saved_code, saved_private_id) == (
+                    source_server_id, req.reservation_token,
+                    req.reserved_server_code, req.private_server_id,
+                ):
+                    result = {"ok": True, "state": "ready"}
+                else:
+                    raise HTTPException(409, "reservation is already ready")
+            elif (state != "claimed" or owner != source_server_id
+                  or token != req.reservation_token or not lease_valid):
+                raise HTTPException(409, "reservation claim is invalid or expired")
+            else:
+                cur.execute(
+                    """UPDATE mm_matches
+                       SET reservation_state='ready', reserved_server_code=%s,
+                           private_server_id=%s
+                       WHERE id=%s""",
+                    (req.reserved_server_code, req.private_server_id, match_id),
+                )
+                result = {"ok": True, "state": "ready"}
+        con.commit()
+        return result
+    except Exception:
+        con.rollback()
+        raise
+    finally:
+        con.close()
+
+
+@app.get(
+    "/v1/match/{match_id}/destination",
+    dependencies=[Depends(require_server)],
+)
+def match_destination(match_id: str, source_server_id: str):
+    source_server_id = source_server_id.strip()
+    if not source_server_id:
+        raise HTTPException(400, "source_server_id is required")
+
+    con = db()
+    try:
+        with con.cursor() as cur:
+            cur.execute(
+                "SELECT reservation_state, destination_place_id, reserved_server_code, private_server_id "
+                "FROM mm_matches WHERE id=%s",
+                (match_id,),
+            )
+            row = cur.fetchone()
+            if not row:
+                raise HTTPException(404, "no such match")
+            cur.execute(
+                "SELECT 1 FROM mm_queue WHERE match_id=%s AND status='assigned' "
+                "AND source_server_id=%s LIMIT 1",
+                (match_id, source_server_id),
+            )
+            if not cur.fetchone():
+                raise HTTPException(403, "source server is not part of this match")
+    finally:
+        con.close()
+
+    state, destination_place_id, code, private_server_id = row
+    if state != "ready":
+        return {"state": state}
+    return {
+        "state": "ready",
+        "destination_place_id": destination_place_id,
+        "reserved_server_code": code,
+        "private_server_id": private_server_id,
+    }
+
+
+@app.get("/v1/match/{match_id}", dependencies=[Depends(require_server)])
 def match(match_id: str):
     con = db()
     try:
@@ -509,20 +785,26 @@ def try_match(cur, mode):
             parties[key] = []
             order.append(key)
         parties[key].append(uid)
-    team_a, team_b = [], []
-    used_keys = set()
-    for key in order:
-        members = parties[key]
-        if len(team_a) + len(members) <= size and key not in used_keys:
-            team_a += members
-            used_keys.add(key)
-        elif len(team_b) + len(members) <= size and key not in used_keys:
-            team_b += members
-            used_keys.add(key)
-        if len(team_a) == size and len(team_b) == size:
+    team_options = []
+    for group_count in range(1, size + 1):
+        for keys in combinations(order, group_count):
+            if sum(len(parties[key]) for key in keys) == size:
+                team_options.append(keys)
+
+    selected = None
+    for team_a_keys in team_options:
+        team_a_set = set(team_a_keys)
+        for team_b_keys in team_options:
+            if team_a_set.isdisjoint(team_b_keys):
+                selected = (team_a_keys, team_b_keys)
+                break
+        if selected:
             break
-    if len(team_a) != size or len(team_b) != size:
+    if not selected:
         return ""
+
+    team_a = [uid for key in selected[0] for uid in parties[key]]
+    team_b = [uid for key in selected[1] for uid in parties[key]]
     match_id = "m_" + uuid.uuid4().hex[:12]
     cur.execute(
         "INSERT INTO mm_matches (id, mode, team_a, team_b) VALUES (%s,%s,%s,%s)",
