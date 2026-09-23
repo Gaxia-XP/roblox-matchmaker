@@ -33,6 +33,8 @@ from pydantic import BaseModel
 
 DATABASE_URL = os.environ["DATABASE_URL"]
 MATCHMAKER_API_KEY = os.environ["MATCHMAKER_API_KEY"]
+if not MATCHMAKER_API_KEY:
+    raise RuntimeError("MATCHMAKER_API_KEY must not be empty")
 MODE_TEAM_SIZE = {"2v2": 2}
 ROBLOX_USERS_URL = "https://users.roblox.com/v1/users"
 ROBLOX_THUMBNAILS_URL = "https://thumbnails.roblox.com/v1/users/avatar-headshot"
